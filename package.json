@@ -17,6 +17,9 @@
     "jsonwebtoken": "^9.0.2",
     "midtrans-client": "^1.4.3"
   },
+  "engines": {
+  "node": "18.x"
+  }
   "devDependencies": {
     "prisma": "^6.19.0"
   }
