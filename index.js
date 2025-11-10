@@ -5,6 +5,17 @@ const midtransClient = require("midtrans-client");
 const { PrismaClient } = require("@prisma/client");
 const jwt = require("jsonwebtoken");
 
+const cloudinary = require("cloudinary").v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const multer = require("multer");
+const upload = multer({ dest: "uploads/" }); 
+
 const app = express();
 const port = process.env.PORT || 3000;
 const prisma = new PrismaClient();
@@ -75,18 +86,47 @@ app.get("/products", async (req, res) => {
 });
 
 // CREATE PRODUCT (ADMIN)
-app.post("/products", adminOnly, async (req, res) => {
+// app.post("/products", adminOnly, async (req, res) => {
+//   try {
+//     const { name, price, image, description } = req.body;
+//     const product = await prisma.product.create({
+//       data: { name, price: Number(price), image, description },
+//     });
+//     res.json(product);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to create product" });
+//   }
+// });
+
+app.post("/products", adminOnly, upload.single("image"), async (req, res) => {
   try {
-    const { name, price, image, description } = req.body;
-    const product = await prisma.product.create({
-      data: { name, price: Number(price), image, description },
+    const { name, price, description } = req.body;
+    const file = req.file;
+
+    if (!file) return res.status(400).json({ error: "Image required" });
+
+    // Upload ke Cloudinary
+    const cloud = await cloudinary.uploader.upload(file.path, {
+      folder: "deloise_products",
     });
+
+    const product = await prisma.product.create({
+      data: {
+        name,
+        price: Number(price),
+        description,
+        image: cloud.secure_url,
+      },
+    });
+
     res.json(product);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create product" });
   }
 });
+
 
 // DELETE PRODUCT (ADMIN)
 app.delete('/products/:id', adminOnly, async (req, res) => {
