@@ -19,7 +19,7 @@
   },
   "engines": {
   "node": "18.x"
-  }
+  },
   "devDependencies": {
     "prisma": "^6.19.0"
   }
