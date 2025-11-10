@@ -3,10 +3,12 @@ const express = require("express");
 const cors = require("cors");
 const midtransClient = require("midtrans-client");
 const { PrismaClient } = require("@prisma/client");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 const port = process.env.PORT || 3000;
 const prisma = new PrismaClient();
+const SECRET = process.env.ADMIN_JWT_SECRET || "changeme";
 
 app.use(
   express.json({
@@ -18,17 +20,50 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
+// MIDTRANS
 const snap = new midtransClient.Snap({
   isProduction: process.env.MIDTRANS_IS_PROD === "true",
   serverKey: process.env.MIDTRANS_SERVER_KEY || "",
   clientKey: process.env.MIDTRANS_CLIENT_KEY || "",
 });
 
-
+// ROOT
 app.get("/", (req, res) => {
   res.json({ message: "Backend OK" });
 });
 
+// ADMIN LOGIN
+app.post("/admin/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password)
+    return res.status(400).json({ error: "Missing fields" });
+
+  if (
+    username === process.env.ADMIN_USERNAME &&
+    password === process.env.ADMIN_PASSWORD
+  ) {
+    const token = jwt.sign({ role: "admin" }, SECRET, { expiresIn: "7d" });
+    return res.json({ token });
+  }
+  return res.status(401).json({ error: "Invalid credentials" });
+});
+
+// ADMIN MIDDLEWARE
+function adminOnly(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: "No token" });
+
+  const token = auth.split(" ")[1];
+  try {
+    jwt.verify(token, SECRET);
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+}
+
+// GET PRODUCTS (PUBLIC)
 app.get("/products", async (req, res) => {
   try {
     const products = await prisma.product.findMany();
@@ -39,7 +74,8 @@ app.get("/products", async (req, res) => {
   }
 });
 
-app.post("/products", async (req, res) => {
+// CREATE PRODUCT (ADMIN)
+app.post("/products", adminOnly, async (req, res) => {
   try {
     const { name, price, image, description } = req.body;
     const product = await prisma.product.create({
@@ -52,6 +88,7 @@ app.post("/products", async (req, res) => {
   }
 });
 
+// ORDER
 app.post("/orders", async (req, res) => {
   try {
     const { productId, userName, email, address, amount = 1 } = req.body;
@@ -78,17 +115,15 @@ app.post("/orders", async (req, res) => {
   }
 });
 
+// CHECKOUT
 app.post("/checkout", async (req, res) => {
   try {
     const { productId, userName, email, address, quantity = 1 } = req.body;
 
-    if (!productId || !userName || !email || !address) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
     const product = await prisma.product.findUnique({
       where: { id: productId },
     });
+
     if (!product) return res.status(404).json({ error: "Product not found" });
 
     const grossAmount = product.price * Number(quantity);
@@ -120,9 +155,7 @@ app.post("/checkout", async (req, res) => {
       customer_details: {
         first_name: userName,
         email: email,
-        billing_address: {
-          address: address,
-        },
+        billing_address: { address },
       },
     };
 
@@ -143,62 +176,41 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// Midtrans webhook (notification)
+// WEBHOOK
 app.post("/midtrans/webhook", async (req, res) => {
   try {
     const notification = req.body;
 
-    const status = notification.transaction_status || notification.status;
-    const orderId =
-      notification.order_id || notification.orderId || notification.orderId;
+    const status = notification.transaction_status;
+    const orderId = notification.order_id;
 
-    if (!orderId) {
-      console.warn("Webhook missing order id", notification);
-      return res.status(400).json({ error: "Missing order id" });
-    }
+    if (!orderId) return res.status(400).json({ error: "Missing order id" });
 
-    // paymentStatus
-    if (
-      status === "settlement" ||
-      status === "capture" ||
-      status === "success"
-    ) {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: "paid" },
-      });
-    } else if (status === "expire") {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: "expired" },
-      });
-    } else if (
-      status === "cancel" ||
-      status === "deny" ||
-      status === "failure"
-    ) {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: "failed" },
-      });
-    } else if (status === "pending") {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: "pending" },
-      });
-    }
+    let paymentStatus = "pending";
+    if (["settlement", "capture", "success"].includes(status))
+      paymentStatus = "paid";
+    else if (status === "expire") paymentStatus = "expired";
+    else if (["cancel", "deny", "failure"].includes(status))
+      paymentStatus = "failed";
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { paymentStatus },
+    });
 
     res.json({ message: "ok" });
   } catch (err) {
     console.error("webhook error", err);
-    res.status(500).json({ error: "Webhook handling failed" });
+    res.status(500).json({ error: "Webhook failed" });
   }
 });
 
+// ORDER DETAIL
 app.get("/orders/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const order = await prisma.order.findUnique({ where: { id } });
+    const order = await prisma.order.findUnique({
+      where: { id: req.params.id },
+    });
     if (!order) return res.status(404).json({ error: "Order not found" });
     res.json(order);
   } catch (err) {
@@ -208,47 +220,5 @@ app.get("/orders/:id", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log("Server running on port", port);
 });
-
-
-// ADMIN
-const jwt = require('jsonwebtoken');
-const SECRET = process.env.ADMIN_JWT_SECRET || 'changeme';
-
-app.post('/admin/login', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
-
-  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
-    const token = jwt.sign({ role: 'admin' }, SECRET, { expiresIn: '7d' });
-    return res.json({ token });
-  }
-  return res.status(401).json({ error: 'Invalid credentials' });
-});
-
-function adminOnly(req, res, next) {
-  const auth = req.headers.authorization;
-  if (!auth) return res.status(401).json({ error: 'No token' });
-  const token = auth.split(' ')[1];
-  try {
-    jwt.verify(token, SECRET);
-    next();
-  } catch (err) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-}
-
-app.post('/products', adminOnly, async (req, res) => {
-  try {
-    const { name, price, image, description } = req.body;
-    const product = await prisma.product.create({
-      data: { name, price: Number(price), image, description }
-    });
-    res.json(product);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to create product' });
-  }
-});
-
