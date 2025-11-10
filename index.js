@@ -88,6 +88,35 @@ app.post("/products", adminOnly, async (req, res) => {
   }
 });
 
+// DELETE PRODUCT (ADMIN)
+app.delete('/products/:id', adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.product.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+// UPDATE PRODUCT (ADMIN)
+app.put('/products/:id', adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, price, image, description } = req.body;
+    const prod = await prisma.product.update({
+      where: { id },
+      data: { name, price: Number(price), image, description }
+    });
+    res.json(prod);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+
 // ORDER
 app.post("/orders", async (req, res) => {
   try {
