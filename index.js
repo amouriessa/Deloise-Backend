@@ -195,7 +195,6 @@ app.post("/midtrans/webhook", async (req, res) => {
   }
 });
 
-// Get order by id
 app.get("/orders/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -211,3 +210,45 @@ app.get("/orders/:id", async (req, res) => {
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
+
+
+// ADMIN
+const jwt = require('jsonwebtoken');
+const SECRET = process.env.ADMIN_JWT_SECRET || 'changeme';
+
+app.post('/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
+
+  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
+    const token = jwt.sign({ role: 'admin' }, SECRET, { expiresIn: '7d' });
+    return res.json({ token });
+  }
+  return res.status(401).json({ error: 'Invalid credentials' });
+});
+
+function adminOnly(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: 'No token' });
+  const token = auth.split(' ')[1];
+  try {
+    jwt.verify(token, SECRET);
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+}
+
+app.post('/products', adminOnly, async (req, res) => {
+  try {
+    const { name, price, image, description } = req.body;
+    const product = await prisma.product.create({
+      data: { name, price: Number(price), image, description }
+    });
+    res.json(product);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to create product' });
+  }
+});
+
