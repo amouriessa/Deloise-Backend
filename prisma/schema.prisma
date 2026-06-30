@@ -26,6 +26,7 @@ model Product {
   batch       PoBatch  @relation(fields: [batchId], references: [id])
   name        String
   slug        String
+  description String?
   price       Int
   stock       Int
   sold        Int      @default(0)

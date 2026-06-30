@@ -16,13 +16,14 @@ const getAllProducts = () =>
 const getProductById = (id) =>
   prisma.product.findUnique({ where: { id }, include: { images: true } });
 
-const createProduct = async ({ batchId, name, slug, price, stock, images = [] }) => {
+const createProduct = async ({ batchId, name, slug, description, price, stock, images = [] }) => {
   try {
     return await prisma.product.create({
       data: {
         batchId,
         name,
         slug,
+        description,
         price,
         stock,
         images: { create: images.map((url, i) => ({ url, order: i })) },
